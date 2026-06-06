@@ -3,6 +3,7 @@ package io.archlens.deployment.models;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.ToString;
 
 /**
  * Represents a detected dependency between two classes (via CDI @Inject).
@@ -11,6 +12,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
+@ToString
 public class DependencyModel {
 
     private String fromClass;
@@ -35,5 +37,19 @@ public class DependencyModel {
         this.fromSubsystem = fromSubsystem;
         this.toLayer = toLayer;
         this.toSubsystem = toSubsystem;
+    }
+
+    public DependencyModel(
+                            String fromClass,
+                            String toClass,
+                            ComponentCoordinate fromCoordinate,
+                            ComponentCoordinate toCoordinate
+    ) {
+        this.fromClass = fromClass;
+        this.toClass = toClass;
+        this.fromLayer = fromCoordinate.layerId();
+        this.fromSubsystem = fromCoordinate.subsystemId();
+        this.toLayer = toCoordinate.layerId();
+        this.toSubsystem = toCoordinate.subsystemId();
     }
 }

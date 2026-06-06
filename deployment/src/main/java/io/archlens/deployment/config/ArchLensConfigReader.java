@@ -57,7 +57,7 @@ public class ArchLensConfigReader {
         Set<String> sharedIds = config.getSharedLayers().keySet();
 
         Set<String> usedSharedIds = config.getSubsystemDefinitions().values().stream()
-                .flatMap(s -> s.getSharedLayerRefs().stream())
+                .flatMap(s -> s.getLayers().values().stream().flatMap(l -> l.getAllowedDependencies().getSharedLayers().stream()))
                 .collect(java.util.stream.Collectors.toSet());
         Set<String> usedInLayersSharedIds = config.getSubsystemDefinitions().values().stream()
                 .flatMap(s -> s.getLayers().values().stream())

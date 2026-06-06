@@ -10,6 +10,7 @@ import io.archlens.deployment.models.ComponentModel;
 import io.archlens.deployment.models.LayerModel;
 import io.archlens.deployment.models.SubsystemModel;
 import io.archlens.deployment.models.enums.ComponentSource;
+import io.archlens.deployment.models.enums.ComponentType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,7 +22,7 @@ import org.jboss.jandex.*;
  * Scans all application classes and assigns each to an architectural layer.
  *
  * <h2>Ambiguity handling:</h2>
- * If a class matches rules in more than one layer, it is assigned to the first
+ * If a class matches rules in more than one layer it is assigned to the first
  * matching layer and flagged as ambiguous so the user can resolve it with
  * {@code @ArchComponent}.
  */
@@ -31,9 +32,6 @@ public class ComponentResolver {
     private static final DotName ARCH_COMPONENT =
             DotName.createSimple("io.archlens.annotations.ArchComponent");
 
-    /**
-     * Prefixes of classes we always skip (framework internals).
-     */
     private static final List<String> SKIP_PREFIXES = List.of(
             "java.", "javax.", "jakarta.", "sun.", "com.sun.",
             "org.jboss.", "io.quarkus.", "io.smallrye.", "io.vertx.",
@@ -52,31 +50,58 @@ public class ComponentResolver {
         model.setAppName(config.getSystem().getName());
         model.setAppDescription(config.getSystem().getDescription());
 
-        List<SubsystemModel> modules = buildSubsystemSkeleton(config);
-        List<LayerModel> shared = buildSharedSkeleton(config);
-        model.setSubsystems(modules);
-        model.setSharedLayers(shared);
+        model.setSubsystems(buildSubsystemSkeleton(config));
+        model.setSharedLayers(buildSharedSkeleton(config));
 
         Map<String, ClassAssignment> assignments = new LinkedHashMap<>();
 
         scanArchLensAnnotatedClasses(index, model, assignments);
-
         scanComponentsWithMatchCriteria(index, model, assignments, config);
 
-        log.debug("ArchLens: scan complete — {} modules, {} shared layers, {} unclassified",
-                model.getSubsystems().size(), model.getSharedLayers().size(),
+        log.debug("ArchLens: scan complete — {} subsystems, {} shared layers, {} unclassified",
+                model.getSubsystems().size(),
+                model.getSharedLayers().size(),
                 model.getUnclassifiedComponents().size());
         return model;
     }
 
-    /**
-     *
-     * @param index       source of components
-     * @param model       ArchitectureModel for scanning process
-     * @param assignments map in which resolved components will be added
-     * @param config      configuration for retrieving matchCriteria
-     */
-    private static void scanComponentsWithMatchCriteria(IndexView index, ArchitectureModel model, Map<String, ClassAssignment> assignments, ArchLensYamlConfig config) {
+    private static void scanArchLensAnnotatedClasses(
+            IndexView index,
+            ArchitectureModel model,
+            Map<String, ClassAssignment> assignments) {
+
+        for (AnnotationInstance ai : index.getAnnotations(ARCH_COMPONENT)) {
+            if (ai.target().kind() != AnnotationTarget.Kind.CLASS) continue;
+
+            ClassInfo classInfo = ai.target().asClass();
+            DotName className = classInfo.name();
+
+            String layerName = ai.value("layer") != null ? ai.value("layer").asString() : "";
+            String subsystemName = ai.value("subsystem") != null ? ai.value("subsystem").asString() : "";
+            String description = ai.value("description") != null ? ai.value("description").asString() : "";
+
+            ComponentModel comp = new ComponentModel(
+                    className, description, ComponentSource.MANUAL, false,
+                    resolveComponentType(classInfo));
+
+            LayerResolution res = resolveLayer(model, layerName, subsystemName);
+            if (res == null) {
+                log.warn("ArchLens: @ArchComponent on {} references unknown layer '{}' (subsystem: '{}') — " +
+                        "placing in unclassified", className, layerName, subsystemName);
+                model.addUnclassifiedComponent(comp);
+            } else {
+                res.layer.getComponents().add(comp);
+                assignments.put(className.toString(), new ClassAssignment(res.subsystemName, layerName));
+            }
+        }
+    }
+
+    private static void scanComponentsWithMatchCriteria(
+            IndexView index,
+            ArchitectureModel model,
+            Map<String, ClassAssignment> assignments,
+            ArchLensYamlConfig config) {
+
         for (ClassInfo classInfo : index.getKnownClasses()) {
             DotName className = classInfo.name();
 
@@ -85,7 +110,7 @@ public class ComponentResolver {
 
             List<LayerResolution> matches = new ArrayList<>();
 
-            // Check shared layers
+            // Check shared layers first
             for (LayerModel sl : model.getSharedLayers()) {
                 LayerConfig cfg = findSharedLayerConfig(config, sl.getId());
                 if (cfg != null && matchesLayer(classInfo, cfg)) {
@@ -106,9 +131,10 @@ public class ComponentResolver {
             }
 
             if (matches.isEmpty()) {
-                // Only flag as unclassified if it looks like an application class
                 if (isLikelyApplicationClass(classInfo)) {
-                    ComponentModel comp = new ComponentModel(className, "", ComponentSource.UNCLASSIFIED, false);
+                    ComponentModel comp = new ComponentModel(
+                            className, "", ComponentSource.UNCLASSIFIED, false,
+                            resolveComponentType(classInfo));
                     model.getUnclassifiedComponents().add(comp);
                 }
                 continue;
@@ -118,9 +144,12 @@ public class ComponentResolver {
             LayerResolution winner = matches.get(0);
             ComponentSource source = determineSource(classInfo, findLayerCfgForResolution(config, winner));
 
-            ComponentModel comp = new ComponentModel(className, "", source, ambiguous);
+            ComponentModel comp = new ComponentModel(
+                    className, "", source, ambiguous,
+                    resolveComponentType(classInfo));
+
             winner.layer.getComponents().add(comp);
-            assignments.put(className.toString(), new ClassAssignment(winner.moduleName, winner.layerName));
+            assignments.put(className.toString(), new ClassAssignment(winner.subsystemName, winner.layerName));
 
             if (ambiguous) {
                 log.debug("ArchLens: {} matched {} layers — assigned to first match '{}'. " +
@@ -129,44 +158,25 @@ public class ComponentResolver {
         }
     }
 
-    /**
-     * Scans components annotated with {@link io.archlens.annotations.ArchComponent} and assigns them to layers based on the annotation values.
-     *
-     * @param index       source of components
-     * @param model       ArchlensModel for scanning process
-     * @param assignments map in which resolved components will be added
-     */
-    private static void scanArchLensAnnotatedClasses(IndexView index, ArchitectureModel model, Map<String, ClassAssignment> assignments) {
-        for (AnnotationInstance annotationInstance : index.getAnnotations(ARCH_COMPONENT)) {
-            if (annotationInstance.target().kind() != AnnotationTarget.Kind.CLASS) continue;
+    static ComponentType resolveComponentType(ClassInfo classInfo) {
+        if (classInfo.isAnnotation()) return ComponentType.ANNOTATION;
+        if (classInfo.isInterface()) return ComponentType.INTERFACE;
+        if (classInfo.isEnum()) return ComponentType.ENUM;
 
-            ClassInfo classInfo = annotationInstance.target().asClass();
-            DotName className = classInfo.name();
-            String layerName = annotationInstance.value("layer") != null ? annotationInstance.value("layer").asString() : "";
-            String moduleName = annotationInstance.value("module") != null ? annotationInstance.value("module").asString() : "";
-            String description = annotationInstance.value("description") != null ? annotationInstance.value("description").asString() : "";
-
-            ComponentModel comp = new ComponentModel(className, description, ComponentSource.MANUAL, false);
-
-            // Resolve the layer from the model
-            LayerResolution res = resolveLayer(model, layerName, moduleName);
-            if (res == null) {
-                log.warn("ArchLens: @ArchComponent on {} references unknown layer '{}' (module: '{}') — " +
-                        "placing in unclassified", className, layerName, moduleName);
-                model.addUnclassifiedComponent(comp);
-            } else {
-                res.layer.getComponents().add(comp);
-                assignments.put(className.toString(), new ClassAssignment(res.moduleName, layerName));
-            }
+        if (classInfo.superName() != null
+                && "java.lang.Record".equals(classInfo.superName().toString())) {
+            return ComponentType.RECORD;
         }
+        return ComponentType.CLASS;
     }
 
     private static List<SubsystemModel> buildSubsystemSkeleton(ArchLensYamlConfig config) {
         return config.getSubsystemDefinitions().entrySet().stream()
-                .map(defenitionEntry -> {
-                    SubsystemDeclaration declaration = config.getSubsystems().get(defenitionEntry.getKey());
-                    return new SubsystemModel(defenitionEntry.getKey(), declaration, defenitionEntry.getValue());
-                }).toList();
+                .map(entry -> {
+                    SubsystemDeclaration declaration = config.getSubsystems().get(entry.getKey());
+                    return new SubsystemModel(entry.getKey(), declaration, entry.getValue());
+                })
+                .toList();
     }
 
     private static List<LayerModel> buildSharedSkeleton(ArchLensYamlConfig config) {
@@ -181,18 +191,14 @@ public class ComponentResolver {
         return hasAnnotationMatch(classInfo, m) || hasPackageMatch(classInfo, m);
     }
 
-    private static boolean hasAnnotationMatch(ClassInfo classInfo, MatchCriteria matchCriteria) {
-        return matchCriteria.getAnnotations().stream()
-                .anyMatch(annotationFqn ->
-                        classInfo.hasAnnotation(DotName.createSimple(annotationFqn))
-                );
+    private static boolean hasAnnotationMatch(ClassInfo classInfo, MatchCriteria criteria) {
+        return criteria.getAnnotations().stream()
+                .anyMatch(fqn -> classInfo.hasAnnotation(DotName.createSimple(fqn)));
     }
 
-    private static boolean hasPackageMatch(ClassInfo classInfo, MatchCriteria matchCriteria) {
-        return matchCriteria.getPackages().stream()
-                .anyMatch(pattern ->
-                        matchesGlob(classInfo.name().toString(), pattern)
-                );
+    private static boolean hasPackageMatch(ClassInfo classInfo, MatchCriteria criteria) {
+        return criteria.getPackages().stream()
+                .anyMatch(pattern -> matchesGlob(classInfo.name().toString(), pattern));
     }
 
     /**
@@ -202,7 +208,6 @@ public class ComponentResolver {
      * <p>{@code *} matches any sequence of characters (including dots).
      */
     static boolean matchesGlob(String className, String pattern) {
-        // Escape dots in the pattern, then replace * with .*
         String regex = pattern
                 .replace(".", "\\.")
                 .replace("*", ".*");
@@ -211,14 +216,15 @@ public class ComponentResolver {
 
     private static ComponentSource determineSource(ClassInfo classInfo, LayerConfig layerConfig) {
         if (layerConfig == null) return ComponentSource.PACKAGE;
-        if (layerConfig.getMatchCriteria() != null && hasAnnotationMatch(classInfo, layerConfig.getMatchCriteria())) {
+        if (layerConfig.getMatchCriteria() != null
+                && hasAnnotationMatch(classInfo, layerConfig.getMatchCriteria())) {
             return ComponentSource.ANNOTATION;
         }
         return ComponentSource.PACKAGE;
     }
 
+
     private static LayerResolution resolveLayer(ArchitectureModel model, String layerName, String subsystemName) {
-        // Shared layers
         for (LayerModel sl : model.getSharedLayers()) {
             if (sl.getId().equalsIgnoreCase(layerName)) {
                 if (subsystemName.isBlank() || subsystemName.equalsIgnoreCase("shared")) {
@@ -226,7 +232,6 @@ public class ComponentResolver {
                 }
             }
         }
-        // Subsystem layers
         for (SubsystemModel mod : model.getSubsystems()) {
             if (!subsystemName.isBlank() && !mod.getId().equalsIgnoreCase(subsystemName)) continue;
             for (LayerModel layer : mod.getLayers()) {
@@ -238,22 +243,22 @@ public class ComponentResolver {
         return null;
     }
 
-    private static SubsystemDefinitionsConfig findSubsystemDefinitionConfig(ArchLensYamlConfig config, String name) {
-        return config.getSubsystemDefinitions().getOrDefault(name, null);
+    private static SubsystemDefinitionsConfig findSubsystemDefinitionConfig(ArchLensYamlConfig config, String id) {
+        return config.getSubsystemDefinitions().getOrDefault(id, null);
     }
 
-    private static LayerConfig findSharedLayerConfig(ArchLensYamlConfig config, String name) {
-        return config.getSharedLayers().getOrDefault(name, null);
+    private static LayerConfig findSharedLayerConfig(ArchLensYamlConfig config, String id) {
+        return config.getSharedLayers().getOrDefault(id, null);
     }
 
-    private static LayerConfig findLayerConfig(SubsystemDefinitionsConfig subsystemModelConfig, String name) {
-        return subsystemModelConfig.getLayers().getOrDefault(name, null);
+    private static LayerConfig findLayerConfig(SubsystemDefinitionsConfig subsystemCfg, String id) {
+        return subsystemCfg.getLayers().getOrDefault(id, null);
     }
 
-    private static LayerConfig findLayerCfgForResolution(ArchLensYamlConfig config, LayerResolution layerResolution) {
-        if (layerResolution.moduleName == null) return findSharedLayerConfig(config, layerResolution.layerName);
-        SubsystemDefinitionsConfig subsystemDefinitionConfig = findSubsystemDefinitionConfig(config, layerResolution.moduleName);
-        return subsystemDefinitionConfig != null ? findLayerConfig(subsystemDefinitionConfig, layerResolution.layerName) : null;
+    private static LayerConfig findLayerCfgForResolution(ArchLensYamlConfig config, LayerResolution res) {
+        if (res.subsystemName == null) return findSharedLayerConfig(config, res.layerName);
+        SubsystemDefinitionsConfig subsystemCfg = findSubsystemDefinitionConfig(config, res.subsystemName);
+        return subsystemCfg != null ? findLayerConfig(subsystemCfg, res.layerName) : null;
     }
 
     private static boolean shouldSkip(String className) {
@@ -264,13 +269,12 @@ public class ComponentResolver {
     }
 
     private static boolean isLikelyApplicationClass(ClassInfo classInfo) {
-        // remove synthetic entities
         return !classInfo.name().toString().contains("$");
     }
 
-    private record LayerResolution(LayerModel layer, String moduleName, String layerName) {
+    private record LayerResolution(LayerModel layer, String subsystemName, String layerName) {
     }
 
-    private record ClassAssignment(String moduleName, String layerName) {
+    private record ClassAssignment(String subsystemName, String layerName) {
     }
 }

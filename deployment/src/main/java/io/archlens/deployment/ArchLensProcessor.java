@@ -7,7 +7,9 @@ import io.archlens.deployment.config.ArchLensYamlConfig;
 import io.archlens.deployment.config.ConfigPathResolver;
 import io.archlens.deployment.discovery.ComponentResolver;
 import io.archlens.deployment.discovery.DependencyAnalyzer;
+import io.archlens.deployment.discovery.ViolationChecker;
 import io.archlens.deployment.models.ArchitectureModel;
+import io.archlens.deployment.models.ViolationModel;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ApplicationIndexBuildItem;
@@ -47,15 +49,15 @@ public class ArchLensProcessor {
             log.warn("""
                     ArchLens: no archlens.yaml found. Searched current directory and parent.
                     Create archlens.yaml at your project root to get started.
-                    """
-            );
+                    """);
             model = new ArchitectureModel();
         } else {
             try {
-                ArchLensYamlConfig config = ArchLensConfigReader.read(configPath);
+                ArchLensYamlConfig yamlConfig = ArchLensConfigReader.read(configPath);
 
-                model = ComponentResolver.scan(applicationIndex.getIndex(), config);
+                model = ComponentResolver.scan(applicationIndex.getIndex(), yamlConfig);
                 DependencyAnalyzer.analyze(applicationIndex.getIndex(), model);
+                ViolationChecker.check(model);
 
             } catch (IOException e) {
                 log.error("ArchLens: failed to read {} — showing empty model in Dev UI", configPath, e);
@@ -64,6 +66,18 @@ public class ArchLensProcessor {
                 throw new RuntimeException(
                         "ArchLens configuration error: " + e.getMessage(), e);
             }
+        }
+
+        if (config.failOnViolation() && !model.getViolations().isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("ArchLens: build failed due to ")
+                    .append(model.getViolations().size())
+                    .append(" architectural violation(s):\n");
+            for (ViolationModel v : model.getViolations()) {
+                sb.append("  ✗ ").append(v.getViolatedRule()).append("\n");
+            }
+            sb.append("\nSet archlens.fail-on-violation=false to suppress this error.");
+            throw new RuntimeException(sb.toString());
         }
 
         modelProducer.produce(new ArchitectureModelBuildItem(model));
