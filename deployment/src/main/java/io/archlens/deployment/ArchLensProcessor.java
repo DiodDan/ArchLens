@@ -10,6 +10,7 @@ import io.archlens.deployment.discovery.DependencyAnalyzer;
 import io.archlens.deployment.discovery.ViolationChecker;
 import io.archlens.deployment.models.ArchitectureModel;
 import io.archlens.deployment.models.ViolationModel;
+import io.quarkus.deployment.IsDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ApplicationIndexBuildItem;
@@ -36,7 +37,7 @@ public class ArchLensProcessor {
     /**
      * Main build step that constructs the architecture model.
      */
-    @BuildStep
+    @BuildStep(onlyIf = IsDevelopment.class)
     void buildArchitectureModel(
             ApplicationIndexBuildItem applicationIndex,
             BuildProducer<ArchitectureModelBuildItem> modelProducer) {

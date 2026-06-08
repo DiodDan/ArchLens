@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.victools.jsonschema.generator.*;
 import com.github.victools.jsonschema.module.jackson.JacksonModule;
 import com.github.victools.jsonschema.module.jackson.JacksonOption;
+import io.quarkus.deployment.IsDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
@@ -28,7 +29,7 @@ public class ArchLensSchemaGeneratorBuildStep {
     static final String SCHEMA_RESOURCE_PATH = "META-INF/archlens-schema.json";
     private static final String SCHEMA_FILE_NAME = "archlens-schema.json";
 
-    @BuildStep
+    @BuildStep(onlyIf = IsDevelopment.class)
     void generateArchLensJsonSchema(
             OutputTargetBuildItem outputTarget,
             BuildProducer<GeneratedResourceBuildItem> generatedResources,
