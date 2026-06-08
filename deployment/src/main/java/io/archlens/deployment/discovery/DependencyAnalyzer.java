@@ -51,7 +51,6 @@ public class DependencyAnalyzer {
     public static void analyze(IndexView index, ArchitectureModel model) {
         Map<String, ComponentCoordinate> classIndex = buildClassIndex(model);
         Set<DotName> qualifierAnnotations = collectQualifierAnnotations(index);
-        System.out.println(qualifierAnnotations);
 
         analyzeInjectAnnotations(index, model, classIndex);
         analyzeQualifierOnlyFields(index, model, classIndex, qualifierAnnotations);
@@ -247,7 +246,7 @@ public class DependencyAnalyzer {
         Set<ClassInfo> candidates = new HashSet<>();
 
         if (targetClassInfo != null && targetClassInfo.isInterface()) {
-            candidates.addAll(index.getAllKnownImplementors(targetType));
+            candidates.addAll(index.getAllKnownImplementations(targetType));
         } else {
             candidates.addAll(index.getAllKnownSubclasses(targetType));
             if (targetClassInfo != null) {
