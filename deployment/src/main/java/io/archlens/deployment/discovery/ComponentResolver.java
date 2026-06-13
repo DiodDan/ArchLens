@@ -74,6 +74,9 @@ public class ComponentResolver {
             if (ai.target().kind() != AnnotationTarget.Kind.CLASS) continue;
 
             ClassInfo classInfo = ai.target().asClass();
+
+            if(classInfo.nestingType() == ClassInfo.NestingType.ANONYMOUS) continue;
+
             DotName className = classInfo.name();
 
             String layerName = ai.value("layer") != null ? ai.value("layer").asString() : "";
@@ -107,6 +110,7 @@ public class ComponentResolver {
 
             if (assignments.containsKey(className.toString())) continue;
             if (shouldSkip(className.toString())) continue;
+            if(classInfo.nestingType() == ClassInfo.NestingType.ANONYMOUS) continue;
 
             List<LayerResolution> matches = new ArrayList<>();
 
@@ -210,8 +214,11 @@ public class ComponentResolver {
     static boolean matchesGlob(String className, String pattern) {
         String regex = pattern
                 .replace(".", "\\.")
-                .replace("*", ".*");
-        return className.matches(regex);
+                .replace("**", "___DOUBLE_STAR___")
+                .replace("*", "[^.]+")
+                .replace("___DOUBLE_STAR___", ".*");
+
+        return className.matches("^" + regex + "$");
     }
 
     private static ComponentSource determineSource(ClassInfo classInfo, LayerConfig layerConfig) {
@@ -269,7 +276,7 @@ public class ComponentResolver {
     }
 
     private static boolean isLikelyApplicationClass(ClassInfo classInfo) {
-        return !classInfo.name().toString().contains("$");
+        return classInfo.nestingType() != ClassInfo.NestingType.ANONYMOUS;
     }
 
     private record LayerResolution(LayerModel layer, String subsystemName, String layerName) {

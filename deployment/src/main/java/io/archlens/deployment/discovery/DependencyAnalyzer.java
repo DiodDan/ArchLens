@@ -1,6 +1,11 @@
 package io.archlens.deployment.discovery;
 
 import io.archlens.deployment.models.*;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.context.RequestScoped;
+import jakarta.enterprise.context.SessionScoped;
+import jakarta.inject.Singleton;
 import java.lang.reflect.Modifier;
 import java.util.*;
 import lombok.extern.slf4j.Slf4j;
@@ -29,9 +34,18 @@ public class DependencyAnalyzer {
     private static final DotName SET = DotName.createSimple("java.util.Set");
     private static final DotName COLLECTION = DotName.createSimple("java.util.Collection");
     private static final DotName INSTANCE_HANDLE = DotName.createSimple("io.quarkus.arc.InstanceHandle");
+    private static final DotName EVENT = DotName.createSimple("jakarta.enterprise.event.Event");
+
+    private static final Set<DotName> KNOWN_SCOPES = Set.of(
+            DotName.createSimple(ApplicationScoped.class.getName()),
+            DotName.createSimple(Singleton.class.getName()),
+            DotName.createSimple(Dependent.class.getName()),
+            DotName.createSimple(RequestScoped.class.getName()),
+            DotName.createSimple(SessionScoped.class.getName())
+    );
 
     private static final Set<DotName> SINGLE_WRAPPER_TYPES = Set.of(
-            PROVIDER, PROVIDER_JAVAX, INSTANCE, INJECTABLE_INSTANCE, OPTIONAL
+            PROVIDER, PROVIDER_JAVAX, INSTANCE, INJECTABLE_INSTANCE, OPTIONAL, EVENT
     );
 
     private static final Set<DotName> MULTI_WRAPPER_TYPES = Set.of(
@@ -83,6 +97,8 @@ public class DependencyAnalyzer {
                                                    ArchitectureModel model,
                                                    Map<String, ComponentCoordinate> classIndex,
                                                    Set<DotName> qualifierAnnotations) {
+        if (qualifierAnnotations.isEmpty()) return;
+
         for (String className : classIndex.keySet()) {
             ClassInfo classInfo = index.getClassByName(DotName.createSimple(className));
             if (classInfo == null) continue;
@@ -107,6 +123,16 @@ public class DependencyAnalyzer {
         for (String className : classIndex.keySet()) {
             ClassInfo classInfo = index.getClassByName(DotName.createSimple(className));
             if (classInfo == null) continue;
+            if (classInfo.annotations().isEmpty()) continue;
+            if (classInfo
+                    .annotations()
+                    .stream()
+                    .noneMatch(annotationInstance ->
+                            KNOWN_SCOPES.contains(annotationInstance.name())
+                    )
+            ) {
+                continue;
+            }
 
             List<MethodInfo> constructors = classInfo.methods().stream()
                     .filter(m -> m.name().equals("<init>"))

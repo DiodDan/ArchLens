@@ -17,7 +17,6 @@ public class SubsystemModel {
     private String name;
     private String description;
     private List<LayerModel> layers = new ArrayList<>();
-    private List<LayerModel> visibleSharedLayers = new ArrayList<>();
     private int violationCount = 0;
 
     public int getTotalComponentCount() { // method is used by serialization, do not remove

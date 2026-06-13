@@ -65,37 +65,45 @@ public class ViolationChecker {
         LayerModel origin = layerIndex.get(layerKey(fromSubsystem, fromLayer));
         if (origin == null) return null;
 
+        String fromReference = buildCoordinateReference(fromSubsystem, fromLayer);
+        String toReference = buildCoordinateReference(toSubsystem, toLayer);
+
         if (toSubsystem == null) {
-            if (!origin.getAllowedSharedLayerIds().contains(toLayer)) {
+            if (!origin.getAllowedSharedLayerIds().contains(toLayer) && !toLayer.equals(fromLayer)) {
                 return String.format(
-                        "Layer '%s' (subsystem '%s') depends on shared layer '%s' which is not listed in allowed-dependencies.shared-layers",
-                        fromLayer, fromSubsystem, toLayer);
+                        "%s depends on %s which is not listed in allowed-dependencies.shared-layers",
+                        fromReference, toReference);
             }
             return null;
         }
 
-        if (fromSubsystem == null) {
+        if (fromSubsystem == null) { // toSubsystem != null
             return String.format(
-                    "Shared layer '%s' has a direct dependency on layer '%s' in subsystem '%s'" +
-                            " — shared layers can't depend on subsystems.",
-                    fromLayer, toLayer, toSubsystem);
+                    "%s has a direct dependency on %s — shared layers can't depend on subsystems.",
+                    fromReference, toReference);
         }
 
         if (!fromSubsystem.equals(toSubsystem)) {
             return String.format(
-                    "Layer '%s' (subsystem '%s') has a direct dependency on layer '%s' in subsystem '%s'" +
-                            " — cross-subsystem dependencies must go through shared layers",
-                    fromLayer, fromSubsystem, toLayer, toSubsystem);
+                    "%s has a direct dependency on %s — cross-subsystem dependencies must go through shared layers",
+                    fromReference, toReference);
         }
 
         if (!origin.getAllowedLayerIds().contains(toLayer)) {
             return String.format(
-                    "Layer '%s' depends on layer '%s' within subsystem '%s'" +
-                            " which is not listed in allowed-dependencies.layers",
-                    fromLayer, toLayer, fromSubsystem);
+                    "%s depends on %s, which is not listed in allowed-dependencies.layers",
+                    fromReference, toReference);
         }
 
         return null;
+    }
+
+    private static String buildCoordinateReference(String subsystem, String layer) {
+        if (subsystem == null) {
+            return "Shared layer " + layer;
+        } else {
+            return String.format("Layer '%s' (subsystem '%s')", layer, subsystem);
+        }
     }
 
     private static void incrementLayerViolationCount(String subsystemId, String layerId, ArchitectureModel model) {
